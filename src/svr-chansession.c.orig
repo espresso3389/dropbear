@@ -607,12 +607,6 @@ static int sessionpty(struct ChanSess * chansess) {
 		TRACE(("leave sessionpty: term len too long"))
 		return DROPBEAR_FAILURE;
 	}
-#ifdef __ANDROID__
-	dropbear_log(LOG_WARNING, "pty requested but unsupported; rejecting pty request");
-	m_free(chansess->term);
-	chansess->term = NULL;
-	return DROPBEAR_FAILURE;
-#endif
 
 	/* allocate the pty */
 	if (chansess->master != -1) {
@@ -620,14 +614,7 @@ static int sessionpty(struct ChanSess * chansess) {
 	}
 	if (pty_allocate(&chansess->master, &chansess->slave, namebuf, 64) == 0) {
 		TRACE(("leave sessionpty: failed to allocate pty"))
-#ifdef __ANDROID__
-		dropbear_log(LOG_WARNING, "pty_allocate failed, rejecting pty request");
-		m_free(chansess->term);
-		chansess->term = NULL;
 		return DROPBEAR_FAILURE;
-#else
-		return DROPBEAR_FAILURE;
-#endif
 	}
 	
 	chansess->tty = m_strdup(namebuf);
@@ -636,11 +623,9 @@ static int sessionpty(struct ChanSess * chansess) {
 	}
 
 	pw = getpwnam(ses.authstate.pw_name);
-	if (pw) {
-		pty_setowner(pw, chansess->tty);
-	} else {
-		dropbear_log(LOG_WARNING, "getpwnam failed, skipping pty_setowner");
-	}
+	if (!pw)
+		dropbear_exit("getpwnam failed after succeeding previously");
+	pty_setowner(pw, chansess->tty);
 
 	/* Set up the rows/col counts */
 	sessionwinchange(chansess);
@@ -1075,63 +1060,6 @@ static void execchild(const void *user_data) {
 	svr_agentset(chansess);
 #endif
 
-#if defined(__ANDROID__)
-	if (chansess->cmd == NULL && chansess->term == NULL) {
-		const char *prompt = "kugutz> ";
-		char linebuf[1024];
-		while (1) {
-			size_t pos = 0;
-			(void)write(1, prompt, strlen(prompt));
-			while (1) {
-				char ch;
-				ssize_t r = read(0, &ch, 1);
-				if (r <= 0) {
-					_exit(0);
-				}
-				if (ch == '\r') {
-					(void)write(1, "\r\n", 2);
-					break;
-				}
-				if (ch == '\n') {
-					(void)write(1, "\r\n", 2);
-					break;
-				}
-				if (ch == '\b' || ch == 0x7f) {
-					if (pos > 0) {
-						pos--;
-					}
-					continue;
-				}
-				if (pos + 1 < sizeof(linebuf)) {
-					linebuf[pos++] = ch;
-				}
-			}
-			linebuf[pos] = '\0';
-			if (pos == 0) {
-				continue;
-			}
-			if (strcmp(linebuf, "exit") == 0 || strcmp(linebuf, "logout") == 0) {
-				_exit(0);
-			}
-			if (strncmp(linebuf, "cd ", 3) == 0) {
-				if (chdir(linebuf + 3) < 0) {
-					dprintf(2, "cd: %s\n", strerror(errno));
-				}
-				continue;
-			}
-			pid_t pid = fork();
-			if (pid == 0) {
-				execl("/system/bin/sh", "sh", "-c", linebuf, (char *)NULL);
-				_exit(127);
-			} else if (pid > 0) {
-				int status = 0;
-				(void)waitpid(pid, &status, 0);
-			} else {
-				dprintf(2, "fork failed: %s\n", strerror(errno));
-			}
-		}
-	}
-#endif
 	usershell = m_strdup(get_user_shell());
 	run_shell_command(chansess->cmd, ses.maxfd, usershell);
 

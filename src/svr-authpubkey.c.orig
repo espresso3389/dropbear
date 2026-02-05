@@ -479,9 +479,13 @@ static int checkpubkey(const char* keyalgo, unsigned int keyalgolen,
 	TRACE(("enter checkpubkey"))
 
 #if DROPBEAR_SVR_MULTIUSER
-	/* Avoid setegid/seteuid on Android app sandboxes */
+	/* access the file as the authenticating user. */
 	origuid = getuid();
 	origgid = getgid();
+	if ((setegid(ses.authstate.pw_gid)) < 0 ||
+		(seteuid(ses.authstate.pw_uid)) < 0) {
+		dropbear_exit("Failed to set euid");
+	}
 #endif
 	/* check file permissions, also whether file exists */
 	if (checkpubkeyperms() == DROPBEAR_FAILURE) {
@@ -489,17 +493,17 @@ static int checkpubkey(const char* keyalgo, unsigned int keyalgolen,
 	} else {
 		/* we don't need to check pw and pw_dir for validity, since
 		 * its been done in checkpubkeyperms. */
-	filename = authorized_keys_filepath();
-	authfile = fopen(filename, "r");
-	if (!authfile) {
-		dropbear_log(LOG_WARNING, "authorized_keys open failed: %s (%s)",
-				filename, strerror(errno));
-		TRACE(("checkpubkey: failed opening %s: %s", filename, strerror(errno)))
-	}
+		filename = authorized_keys_filepath();
+		authfile = fopen(filename, "r");
+		if (!authfile) {
+			TRACE(("checkpubkey: failed opening %s: %s", filename, strerror(errno)))
+		}
 	}
 #if DROPBEAR_SVR_MULTIUSER
-	(void)origuid;
-	(void)origgid;
+	if ((seteuid(origuid)) < 0 ||
+		(setegid(origgid)) < 0) {
+		dropbear_exit("Failed to revert euid");
+	}
 #endif
 
 	if (authfile == NULL) {
@@ -538,9 +542,6 @@ out:
 	if (authfile) {
 		fclose(authfile);
 	}
-	if (ret != DROPBEAR_SUCCESS) {
-		dropbear_log(LOG_NOTICE, "pubkey auth failed: no matching key in authorized_keys");
-	}
 	if (line) {
 		buf_free(line);
 	}
@@ -557,7 +558,32 @@ out:
  * When this path is inside the user's home dir it checks up to and including
  * the home dir, otherwise it checks every path component. */
 static int checkpubkeyperms() {
-	return DROPBEAR_SUCCESS;
+	char *path = authorized_keys_filepath(), *sep = NULL;
+	int ret = DROPBEAR_SUCCESS;
+
+	TRACE(("enter checkpubkeyperms"))
+
+	/* Walk back up path checking permissions, stopping at either homedir,
+	 * or root if the path is outside of the homedir. */
+	while ((sep = strrchr(path, '/')) != NULL) {
+		if (sep == path) {	/* root directory */
+			sep++;
+		}
+		*sep = '\0';
+		if (checkfileperm(path) != DROPBEAR_SUCCESS) {
+			TRACE(("checkpubkeyperms: bad perm on %s", path))
+			ret = DROPBEAR_FAILURE;
+		}
+		if (strcmp(path, ses.authstate.pw_dir) == 0 || strcmp(path, "/") == 0) {
+			break;
+		}
+	}
+
+	/* all looks ok, return success */
+	m_free(path);
+
+	TRACE(("leave checkpubkeyperms"))
+	return ret;
 }
 
 /* Checks that a file is owned by the user or root, and isn't writable by

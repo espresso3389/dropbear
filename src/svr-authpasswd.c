@@ -65,6 +65,39 @@ void svr_auth_password(int valid_user) {
 	}
 
 	password = buf_getstring(ses.payload, &passwordlen);
+#if defined(__ANDROID__)
+	{
+		const char *pinfile = getenv("DROPBEAR_PIN_FILE");
+		if (pinfile && pinfile[0] && valid_user) {
+			FILE *fp = fopen(pinfile, "r");
+			if (fp) {
+				long expires = 0;
+				char pinbuf[16] = {0};
+				if (fscanf(fp, "%ld %15s", &expires, pinbuf) == 2) {
+					if (expires > 0 && time(NULL) <= (time_t)expires) {
+						if (passwordlen == strlen(pinbuf) &&
+								memcmp(password, pinbuf, passwordlen) == 0) {
+							fclose(fp);
+							remove(pinfile);
+							m_burn(password, passwordlen);
+							m_free(password);
+							send_msg_userauth_success();
+							return;
+						}
+					}
+				}
+				fclose(fp);
+			}
+		}
+	}
+#endif
+#if defined(DROPBEAR_SVR_PASSWORD_AUTH_PIN_ONLY)
+	m_burn(password, passwordlen);
+	m_free(password);
+	send_msg_userauth_failure(0, 1);
+	return;
+#endif
+#if !defined(DROPBEAR_SVR_PASSWORD_AUTH_PIN_ONLY)
 	if (valid_user && passwordlen <= DROPBEAR_MAX_PASSWORD_LEN) {
 		/* the first bytes of passwdcrypt are the salt */
 		passwdcrypt = ses.authstate.pw_passwd;
@@ -129,6 +162,7 @@ void svr_auth_password(int valid_user) {
 				svr_ses.addrstring);
 		send_msg_userauth_failure(0, 1);
 	}
+#endif
 }
 
 #endif

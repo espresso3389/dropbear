@@ -91,7 +91,48 @@ pty_allocate(int *ptyfd, int *ttyfd, char *namebuf, int namebuflen)
 	}
 	return 1;
 #else /* HAVE__GETPTY */
-#if defined(USE_DEV_PTMX)
+#if defined(__ANDROID__)
+	int ptm;
+	char *pts;
+
+	ptm = open("/dev/ptmx", O_RDWR | O_NOCTTY);
+	if (ptm < 0) {
+		dropbear_log(LOG_WARNING,
+				"pty_allocate: /dev/ptmx: %.100s", strerror(errno));
+		return 0;
+	}
+	if (grantpt(ptm) < 0) {
+		dropbear_log(LOG_WARNING,
+				"grantpt: %.100s", strerror(errno));
+		close(ptm);
+		return 0;
+	}
+	if (unlockpt(ptm) < 0) {
+		dropbear_log(LOG_WARNING,
+				"unlockpt: %.100s", strerror(errno));
+		close(ptm);
+		return 0;
+	}
+	pts = ptsname(ptm);
+	if (pts == NULL) {
+		dropbear_log(LOG_WARNING,
+				"Slave pty side name could not be obtained.");
+		close(ptm);
+		return 0;
+	}
+	strlcpy(namebuf, pts, namebuflen);
+	*ptyfd = ptm;
+
+	*ttyfd = open(namebuf, O_RDWR | O_NOCTTY);
+	if (*ttyfd < 0) {
+		dropbear_log(LOG_ERR,
+			"error opening pts %.100s: %.100s", namebuf, strerror(errno));
+		close(*ptyfd);
+		return 0;
+	}
+	return 1;
+
+#elif defined(USE_DEV_PTMX)
 	/*
 	 * This code is used e.g. on Solaris 2.x.  (Note that Solaris 2.3
 	 * also has bsd-style ptys, but they simply do not work.)
@@ -360,6 +401,9 @@ pty_setowner(struct passwd *pw, const char *tty_name)
 	mode_t mode;
 	struct stat st;
 
+	if (!pw || !tty_name) {
+		return;
+	}
 	/* Determine the group to make the owner of the tty. */
 	grp = getgrnam("tty");
 	if (grp) {
@@ -376,7 +420,7 @@ pty_setowner(struct passwd *pw, const char *tty_name)
 	 * tty is owned by root.
 	 */
 	if (stat(tty_name, &st)) {
-		dropbear_exit("pty_setowner: stat(%.101s) failed: %.100s",
+		dropbear_log(LOG_WARNING, "pty_setowner: stat(%.101s) failed: %.100s",
 				tty_name, strerror(errno));
 	}
 
@@ -391,7 +435,7 @@ pty_setowner(struct passwd *pw, const char *tty_name)
 						tty_name, (unsigned int)pw->pw_uid, (unsigned int)gid,
 						strerror(errno));
 			} else {
-				dropbear_exit("chown(%.100s, %u, %u) failed: %.100s",
+				dropbear_log(LOG_WARNING, "chown(%.100s, %u, %u) failed: %.100s",
 				    tty_name, (unsigned int)pw->pw_uid, (unsigned int)gid,
 				    strerror(errno));
 			}
@@ -406,7 +450,7 @@ pty_setowner(struct passwd *pw, const char *tty_name)
 					"chmod(%.100s, 0%o) failed: %.100s",
 					tty_name, mode, strerror(errno));
 			} else {
-				dropbear_exit("chmod(%.100s, 0%o) failed: %.100s",
+				dropbear_log(LOG_WARNING, "chmod(%.100s, 0%o) failed: %.100s",
 				    tty_name, mode, strerror(errno));
 			}
 		}

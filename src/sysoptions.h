@@ -335,7 +335,7 @@
 #error "DROPBEAR_SVR_PAM_AUTH requires PAM headers. Perhaps ./configure --enable-pam ?"
 #endif
 
-#if DROPBEAR_SVR_PASSWORD_AUTH && !HAVE_CRYPT
+#if DROPBEAR_SVR_PASSWORD_AUTH && !HAVE_CRYPT && !DROPBEAR_SVR_PASSWORD_AUTH_PIN_ONLY
 	#error "DROPBEAR_SVR_PASSWORD_AUTH requires `crypt()'."
 #endif
 

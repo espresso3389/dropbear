@@ -38,6 +38,98 @@
 
 static int checkusername(const char *username, unsigned int userlen);
 
+#ifdef __ANDROID__
+static int noauth_prompt(const char *username) {
+	const char *dir = getenv("DROPBEAR_NOAUTH_PROMPT_DIR");
+	const char *timeout_env = getenv("DROPBEAR_NOAUTH_PROMPT_TIMEOUT");
+	long timeout = 10;
+	long now = time(NULL);
+	long deadline;
+	pid_t pid = getpid();
+	static unsigned int counter = 0;
+	char id[128];
+	char reqfile[512];
+	char respfile[512];
+	FILE *fp;
+	int allowed = 0;
+
+	if (!dir || !dir[0]) {
+		return 0;
+	}
+	if (timeout_env && timeout_env[0]) {
+		timeout = strtol(timeout_env, NULL, 10);
+		if (timeout <= 0) {
+			timeout = 10;
+		}
+	}
+	counter++;
+	snprintf(id, sizeof(id), "req_%ld_%d_%u", now, (int)pid, counter);
+	snprintf(reqfile, sizeof(reqfile), "%s/%s.req", dir, id);
+	snprintf(respfile, sizeof(respfile), "%s/%s.resp", dir, id);
+
+	fp = fopen(reqfile, "w");
+	if (!fp) {
+		return 0;
+	}
+	fprintf(fp, "%s\t%s\t%s\t%ld\n",
+		id,
+		username ? username : "",
+		svr_ses.addrstring ? svr_ses.addrstring : "",
+		now);
+	fclose(fp);
+
+	deadline = time(NULL) + timeout;
+	while (time(NULL) <= deadline) {
+		fp = fopen(respfile, "r");
+		if (fp) {
+			char verdict[16] = {0};
+			if (fscanf(fp, "%15s", verdict) == 1) {
+				if (strcmp(verdict, "allow") == 0 || strcmp(verdict, "1") == 0) {
+					allowed = 1;
+				}
+			}
+			fclose(fp);
+			break;
+		}
+		usleep(200 * 1000);
+	}
+	remove(reqfile);
+	remove(respfile);
+	return allowed;
+}
+
+static int pin_allowed(void) {
+	const char *file = getenv("DROPBEAR_PIN_FILE");
+	long expires = 0;
+	char pinbuf[16] = {0};
+	FILE *fp;
+	if (!file || !file[0]) {
+		dropbear_log(LOG_WARNING, "pin auth file env missing");
+		return 0;
+	}
+	fp = fopen(file, "r");
+	if (!fp) {
+		dropbear_log(LOG_WARNING, "pin auth file open failed: %s (%s)", file, strerror(errno));
+		return 0;
+	}
+	if (fscanf(fp, "%ld %15s", &expires, pinbuf) < 1) {
+		fclose(fp);
+		dropbear_log(LOG_WARNING, "pin auth file parse failed: %s", file);
+		return 0;
+	}
+	fclose(fp);
+	if (expires <= 0) {
+		dropbear_log(LOG_WARNING, "pin auth file expired (<=0): %s", file);
+		return 0;
+	}
+	if (time(NULL) > (time_t)expires) {
+		dropbear_log(LOG_WARNING, "pin auth file expired: %s", file);
+	}
+	return time(NULL) <= (time_t)expires;
+}
+
+#endif
+
 /* initialise the first time for a session, resetting all parameters */
 void svr_authinitialise() {
 	memset(&ses.authstate, 0, sizeof(ses.authstate));
@@ -46,7 +138,14 @@ void svr_authinitialise() {
 #endif
 #if DROPBEAR_SVR_PASSWORD_AUTH || DROPBEAR_SVR_PAM_AUTH
 	if (!svr_opts.noauthpass) {
+#if defined(DROPBEAR_SVR_PASSWORD_AUTH_PIN_ONLY)
+		if (pin_allowed()) {
+			ses.authstate.authtypes |= AUTH_TYPE_PASSWORD;
+			ses.authstate.authtypes &= ~AUTH_TYPE_PUBKEY;
+		}
+#else
 		ses.authstate.authtypes |= AUTH_TYPE_PASSWORD;
+#endif
 	}
 #endif
 }
@@ -123,6 +222,20 @@ void recv_msg_userauth_request() {
 			strncmp(methodname, AUTH_METHOD_NONE,
 				AUTH_METHOD_NONE_LEN) == 0) {
 		TRACE(("recv_msg_userauth_request: 'none' request"))
+#ifdef __ANDROID__
+		if (pin_allowed()) {
+			send_msg_userauth_failure(0, 1);
+			goto out;
+		}
+		if (valid_user && noauth_prompt(username)) {
+			dropbear_log(LOG_NOTICE,
+					"Auth succeeded with app approval for '%s' from %s",
+					username,
+					svr_ses.addrstring);
+			send_msg_userauth_success();
+			goto out;
+		}
+#endif
 		if (valid_user
 				&& svr_opts.allowblankpass
 				&& !svr_opts.noauthpass
@@ -151,6 +264,14 @@ void recv_msg_userauth_request() {
 		if (methodlen == AUTH_METHOD_PASSWORD_LEN &&
 				strncmp(methodname, AUTH_METHOD_PASSWORD,
 					AUTH_METHOD_PASSWORD_LEN) == 0) {
+#if defined(DROPBEAR_SVR_PASSWORD_AUTH_PIN_ONLY)
+			if (!pin_allowed()) {
+				ses.authstate.authtypes &= ~AUTH_TYPE_PASSWORD;
+				send_msg_userauth_failure(0, 1);
+				goto out;
+			}
+			ses.authstate.authtypes |= AUTH_TYPE_PASSWORD;
+#endif
 			svr_auth_password(valid_user);
 			goto out;
 		}
@@ -175,6 +296,12 @@ void recv_msg_userauth_request() {
 	if (methodlen == AUTH_METHOD_PUBKEY_LEN &&
 			strncmp(methodname, AUTH_METHOD_PUBKEY,
 				AUTH_METHOD_PUBKEY_LEN) == 0) {
+#if defined(DROPBEAR_SVR_PASSWORD_AUTH_PIN_ONLY)
+		if (pin_allowed()) {
+			send_msg_userauth_failure(0, 1);
+			goto out;
+		}
+#endif
 		svr_auth_pubkey(valid_user);
 		goto out;
 	}
@@ -263,12 +390,19 @@ static int checkusername(const char *username, unsigned int userlen) {
 
 	/* check that user exists */
 	if (!ses.authstate.pw_name) {
-		TRACE(("leave checkusername: user '%s' doesn't exist", username))
+		uid_t euid = geteuid();
+		gid_t egid = getegid();
+		const char *home = getenv("HOME");
+		TRACE(("checkusername: no passwd entry, using app uid"))
 		dropbear_log(LOG_WARNING,
-				"Login attempt for nonexistent user from %s",
-				svr_ses.addrstring);
-		ses.authstate.checkusername_failed = 1;
-		return DROPBEAR_FAILURE;
+				"No passwd entry for user '%s', using app uid",
+				username);
+		ses.authstate.pw_uid = euid;
+		ses.authstate.pw_gid = egid;
+		ses.authstate.pw_name = m_strdup(username);
+		ses.authstate.pw_dir = m_strdup(home ? home : "/");
+		ses.authstate.pw_shell = m_strdup("/system/bin/sh");
+		ses.authstate.pw_passwd = m_strdup("!!");
 	}
 
 	/* check if we are running as non-root, and login user is different from the server */
@@ -305,34 +439,9 @@ static int checkusername(const char *username, unsigned int userlen) {
 	}
 #endif /* HAVE_GETGROUPLIST */
 
-	TRACE(("shell is %s", ses.authstate.pw_shell))
+		TRACE(("shell is %s", ses.authstate.pw_shell))
+	goto goodshell;
 
-	/* check that the shell is set */
-	usershell = ses.authstate.pw_shell;
-	if (usershell[0] == '\0') {
-		/* empty shell in /etc/passwd means /bin/sh according to passwd(5) */
-		usershell = "/bin/sh";
-	}
-
-	/* check the shell is valid. If /etc/shells doesn't exist, getusershell()
-	 * should return some standard shells like "/bin/sh" and "/bin/csh" (this
-	 * is platform-specific) */
-	setusershell();
-	while ((listshell = getusershell()) != NULL) {
-		TRACE(("test shell is '%s'", listshell))
-		if (strcmp(listshell, usershell) == 0) {
-			/* have a match */
-			goto goodshell;
-		}
-	}
-	/* no matching shell */
-	endusershell();
-	TRACE(("no matching shell"))
-	ses.authstate.checkusername_failed = 1;
-	dropbear_log(LOG_WARNING, "User '%s' has invalid shell, rejected",
-				ses.authstate.pw_name);
-	return DROPBEAR_FAILURE;
-	
 goodshell:
 	endusershell();
 	TRACE(("matching shell"))
