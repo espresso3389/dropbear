@@ -1118,22 +1118,31 @@ static void execchild(const void *user_data) {
 	{
 		const char *nlib = getenv("KUGUTZ_NATIVELIB");
 		if (nlib && nlib[0]) {
-			size_t plen = strlen(nlib) * 8 + 640;
+				size_t plen = strlen(nlib) * 16 + 4096;
 			kugutz_preamble = m_malloc(plen);
-			snprintf(kugutz_preamble, plen,
-				"python3(){ %s/libkugutzpy.so \"$@\"; }; "
-				"python(){ python3 \"$@\"; }; "
-				"pip(){ %s/libkugutzpy.so -m pip \"$@\"; }; "
-				"pip3(){ pip \"$@\"; }; "
-				"uv(){ %s/libkugutzpy.so -m uv \"$@\"; }; "
-				"uvx(){ uv tool run \"$@\"; }; "
-				"ssh(){ %s/libdbclient.so \"$@\"; }; "
-				"dbclient(){ ssh \"$@\"; }; "
-				"scp(){ %s/libscp.so -S %s/libdbclient.so \"$@\"; }; "
-				"dropbearkey(){ %s/libdropbearkey.so \"$@\"; }; ",
-				nlib, nlib, nlib, nlib, nlib, nlib, nlib);
+				snprintf(kugutz_preamble, plen,
+					"python3(){ %s/libkugutzpy.so \"$@\"; }; "
+					"python(){ python3 \"$@\"; }; "
+					"pip(){ %s/libkugutzpy.so -m pip \"$@\"; }; "
+					"pip3(){ pip \"$@\"; }; "
+					"uv(){ %s/libkugutzpy.so -m uv \"$@\"; }; "
+					"uvx(){ uv tool run \"$@\"; }; "
+					"curl(){ %s/libkugutzpy.so -c 'import json,os,shlex,sys,urllib.request;"
+						"u=\"http://127.0.0.1:8765/shell/exec\";"
+						"d=json.dumps({\"cmd\":\"curl\",\"args\":shlex.join(sys.argv[1:]),\"cwd\":os.getcwd()}).encode();"
+						"req=urllib.request.Request(u,data=d,headers={\"Content-Type\":\"application/json\"});"
+						"r=urllib.request.urlopen(req,timeout=60);"
+						"o=json.loads(r.read().decode(\"utf-8\",errors=\"replace\"));"
+						"out=o.get(\"output\",\"\");"
+						"sys.stdout.write(out if isinstance(out,str) else str(out));"
+						"raise SystemExit(int(o.get(\"code\",1)))' \"$@\"; }; "
+					"ssh(){ %s/libdbclient.so \"$@\"; }; "
+					"dbclient(){ ssh \"$@\"; }; "
+					"scp(){ %s/libscp.so -S %s/libdbclient.so \"$@\"; }; "
+					"dropbearkey(){ %s/libdropbearkey.so \"$@\"; }; ",
+					nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib);
+			}
 		}
-	}
 
 	if (chansess->cmd == NULL && chansess->term == NULL) {
 		const char *prompt = "kugutz> ";
