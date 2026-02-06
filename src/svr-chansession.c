@@ -997,6 +997,30 @@ static void execchild(const void *user_data) {
 	seedrandom();
 #endif
 
+	/* Save Kugutz environment vars BEFORE clearenv() wipes them.
+	   These are set by SshdManager and need to reach child sessions. */
+	char *saved_path = NULL;
+	char *saved_kugutz_home = NULL;
+	char *saved_kugutz_pyenv = NULL;
+	char *saved_kugutz_nativelib = NULL;
+	char *saved_ld_library_path = NULL;
+	char *saved_pythonhome = NULL;
+	char *saved_pythonpath = NULL;
+	char *saved_ssl_cert_file = NULL;
+	char *saved_pip_cert = NULL;
+	{
+		const char *v;
+		if ((v = getenv("PATH")) && v[0]) saved_path = m_strdup(v);
+		if ((v = getenv("KUGUTZ_HOME")) && v[0]) saved_kugutz_home = m_strdup(v);
+		if ((v = getenv("KUGUTZ_PYENV")) && v[0]) saved_kugutz_pyenv = m_strdup(v);
+		if ((v = getenv("KUGUTZ_NATIVELIB")) && v[0]) saved_kugutz_nativelib = m_strdup(v);
+		if ((v = getenv("LD_LIBRARY_PATH")) && v[0]) saved_ld_library_path = m_strdup(v);
+		if ((v = getenv("PYTHONHOME")) && v[0]) saved_pythonhome = m_strdup(v);
+		if ((v = getenv("PYTHONPATH")) && v[0]) saved_pythonpath = m_strdup(v);
+		if ((v = getenv("SSL_CERT_FILE")) && v[0]) saved_ssl_cert_file = m_strdup(v);
+		if ((v = getenv("PIP_CERT")) && v[0]) saved_pip_cert = m_strdup(v);
+	}
+
 	/* clear environment if -e was not set */
 	/* if we're debugging using valgrind etc, we need to keep the LD_PRELOAD
 	 * etc. This is hazardous, so should only be used for debugging. */
@@ -1022,11 +1046,23 @@ static void execchild(const void *user_data) {
 	addnewvar("LOGNAME", ses.authstate.pw_name);
 	addnewvar("HOME", ses.authstate.pw_dir);
 	addnewvar("SHELL", get_user_shell());
-	if (getuid() == 0) {
+	if (saved_path) {
+		addnewvar("PATH", saved_path);
+	} else if (getuid() == 0) {
 		addnewvar("PATH", DEFAULT_ROOT_PATH);
 	} else {
 		addnewvar("PATH", DEFAULT_PATH);
 	}
+
+	/* Restore Kugutz environment for child sessions. */
+	if (saved_kugutz_home) addnewvar("KUGUTZ_HOME", saved_kugutz_home);
+	if (saved_kugutz_pyenv) addnewvar("KUGUTZ_PYENV", saved_kugutz_pyenv);
+	if (saved_kugutz_nativelib) addnewvar("KUGUTZ_NATIVELIB", saved_kugutz_nativelib);
+	if (saved_ld_library_path) addnewvar("LD_LIBRARY_PATH", saved_ld_library_path);
+	if (saved_pythonhome) addnewvar("PYTHONHOME", saved_pythonhome);
+	if (saved_pythonpath) addnewvar("PYTHONPATH", saved_pythonpath);
+	if (saved_ssl_cert_file) addnewvar("SSL_CERT_FILE", saved_ssl_cert_file);
+	if (saved_pip_cert) addnewvar("PIP_CERT", saved_pip_cert);
 	if (cp != NULL) {
 		addnewvar("LANG", cp);
 		m_free(cp);
@@ -1076,6 +1112,23 @@ static void execchild(const void *user_data) {
 #endif
 
 #if defined(__ANDROID__)
+	/* Build shell function preamble that maps python3/pip to libkugutzpy.so.
+	   This avoids SELinux issues with symlinks/scripts in app_data_file. */
+	char *kugutz_preamble = NULL;
+	{
+		const char *nlib = getenv("KUGUTZ_NATIVELIB");
+		if (nlib && nlib[0]) {
+			size_t plen = strlen(nlib) * 2 + 256;
+			kugutz_preamble = m_malloc(plen);
+			snprintf(kugutz_preamble, plen,
+				"python3(){ %s/libkugutzpy.so \"$@\"; }; "
+				"python(){ python3 \"$@\"; }; "
+				"pip(){ %s/libkugutzpy.so -m pip \"$@\"; }; "
+				"pip3(){ pip \"$@\"; }; ",
+				nlib, nlib);
+		}
+	}
+
 	if (chansess->cmd == NULL && chansess->term == NULL) {
 		const char *prompt = "kugutz> ";
 		char linebuf[1024];
@@ -1121,7 +1174,15 @@ static void execchild(const void *user_data) {
 			}
 			pid_t pid = fork();
 			if (pid == 0) {
-				execl("/system/bin/sh", "sh", "-c", linebuf, (char *)NULL);
+				if (kugutz_preamble) {
+					/* Prepend function defs so python3/pip resolve correctly */
+					size_t wlen = strlen(kugutz_preamble) + strlen(linebuf) + 1;
+					char *wrapped = m_malloc(wlen);
+					snprintf(wrapped, wlen, "%s%s", kugutz_preamble, linebuf);
+					execl("/system/bin/sh", "sh", "-c", wrapped, (char *)NULL);
+				} else {
+					execl("/system/bin/sh", "sh", "-c", linebuf, (char *)NULL);
+				}
 				_exit(127);
 			} else if (pid > 0) {
 				int status = 0;
@@ -1131,9 +1192,23 @@ static void execchild(const void *user_data) {
 			}
 		}
 	}
-#endif
+
+	/* Wrap non-interactive commands with python3/pip function definitions */
+	{
+		const char *final_cmd = chansess->cmd;
+		if (chansess->cmd != NULL && kugutz_preamble) {
+			size_t wlen = strlen(kugutz_preamble) + strlen(chansess->cmd) + 1;
+			char *wrapped = m_malloc(wlen);
+			snprintf(wrapped, wlen, "%s%s", kugutz_preamble, chansess->cmd);
+			final_cmd = wrapped;
+		}
+		usershell = m_strdup(get_user_shell());
+		run_shell_command(final_cmd, ses.maxfd, usershell);
+	}
+#else
 	usershell = m_strdup(get_user_shell());
 	run_shell_command(chansess->cmd, ses.maxfd, usershell);
+#endif
 
 	/* only reached on error */
 	dropbear_exit("Child failed");

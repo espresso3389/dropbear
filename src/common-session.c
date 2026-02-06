@@ -637,6 +637,10 @@ static long select_timeout() {
 }
 
 const char* get_user_shell() {
+	const char* env_shell = getenv("KUGUTZ_SHELL");
+	if (env_shell && env_shell[0] != '\0') {
+		return env_shell;
+	}
 	/* an empty shell should be interpreted as "/bin/sh" */
 	if (ses.authstate.pw_shell[0] == '\0') {
 		return "/bin/sh";
@@ -725,4 +729,3 @@ void update_channel_prio() {
 		ses.socket_prio = new_prio;
 	}
 }
-
