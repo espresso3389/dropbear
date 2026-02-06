@@ -1118,18 +1118,20 @@ static void execchild(const void *user_data) {
 	{
 		const char *nlib = getenv("KUGUTZ_NATIVELIB");
 		if (nlib && nlib[0]) {
-			size_t plen = strlen(nlib) * 6 + 512;
+			size_t plen = strlen(nlib) * 8 + 640;
 			kugutz_preamble = m_malloc(plen);
 			snprintf(kugutz_preamble, plen,
 				"python3(){ %s/libkugutzpy.so \"$@\"; }; "
 				"python(){ python3 \"$@\"; }; "
 				"pip(){ %s/libkugutzpy.so -m pip \"$@\"; }; "
 				"pip3(){ pip \"$@\"; }; "
+				"uv(){ %s/libkugutzpy.so -m uv \"$@\"; }; "
+				"uvx(){ uv tool run \"$@\"; }; "
 				"ssh(){ %s/libdbclient.so \"$@\"; }; "
 				"dbclient(){ ssh \"$@\"; }; "
 				"scp(){ %s/libscp.so -S %s/libdbclient.so \"$@\"; }; "
 				"dropbearkey(){ %s/libdropbearkey.so \"$@\"; }; ",
-				nlib, nlib, nlib, nlib, nlib, nlib);
+				nlib, nlib, nlib, nlib, nlib, nlib, nlib);
 		}
 	}
 
