@@ -1112,20 +1112,24 @@ static void execchild(const void *user_data) {
 #endif
 
 #if defined(__ANDROID__)
-	/* Build shell function preamble that maps python3/pip to libkugutzpy.so.
+	/* Build shell function preamble that maps commands to native lib binaries.
 	   This avoids SELinux issues with symlinks/scripts in app_data_file. */
 	char *kugutz_preamble = NULL;
 	{
 		const char *nlib = getenv("KUGUTZ_NATIVELIB");
 		if (nlib && nlib[0]) {
-			size_t plen = strlen(nlib) * 2 + 256;
+			size_t plen = strlen(nlib) * 6 + 512;
 			kugutz_preamble = m_malloc(plen);
 			snprintf(kugutz_preamble, plen,
 				"python3(){ %s/libkugutzpy.so \"$@\"; }; "
 				"python(){ python3 \"$@\"; }; "
 				"pip(){ %s/libkugutzpy.so -m pip \"$@\"; }; "
-				"pip3(){ pip \"$@\"; }; ",
-				nlib, nlib);
+				"pip3(){ pip \"$@\"; }; "
+				"ssh(){ %s/libdbclient.so \"$@\"; }; "
+				"dbclient(){ ssh \"$@\"; }; "
+				"scp(){ %s/libscp.so -S %s/libdbclient.so \"$@\"; }; "
+				"dropbearkey(){ %s/libdropbearkey.so \"$@\"; }; ",
+				nlib, nlib, nlib, nlib, nlib, nlib);
 		}
 	}
 
