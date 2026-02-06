@@ -1125,7 +1125,10 @@ static void execchild(const void *user_data) {
 					"python(){ python3 \"$@\"; }; "
 					"pip(){ %s/libkugutzpy.so -m pip \"$@\"; }; "
 					"pip3(){ pip \"$@\"; }; "
-					"uv(){ %s/libkugutzpy.so -m uv \"$@\"; }; "
+					/* Auto-bootstrap uv on first use if the module isn't installed yet. */
+					"uv(){ %s/libkugutzpy.so -c 'import importlib.util,sys;sys.exit(0 if importlib.util.find_spec(\"uv\") else 1)'; "
+						"if [ $? -ne 0 ]; then %s/libkugutzpy.so -m pip install uv || return $?; fi; "
+						"%s/libkugutzpy.so -m uv \"$@\"; }; "
 					"uvx(){ uv tool run \"$@\"; }; "
 					"curl(){ %s/libkugutzpy.so -c 'import json,os,shlex,sys,urllib.request;"
 						"u=\"http://127.0.0.1:8765/shell/exec\";"
@@ -1140,7 +1143,7 @@ static void execchild(const void *user_data) {
 					"dbclient(){ ssh \"$@\"; }; "
 					"scp(){ %s/libscp.so -S %s/libdbclient.so \"$@\"; }; "
 					"dropbearkey(){ %s/libdropbearkey.so \"$@\"; }; ",
-					nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib);
+					nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib);
 			}
 		}
 
