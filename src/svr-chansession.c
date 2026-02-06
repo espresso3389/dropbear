@@ -1123,7 +1123,26 @@ static void execchild(const void *user_data) {
 				snprintf(kugutz_preamble, plen,
 					"python3(){ %s/libkugutzpy.so \"$@\"; }; "
 					"python(){ python3 \"$@\"; }; "
-					"pip(){ %s/libkugutzpy.so -m pip \"$@\"; }; "
+					/* Default to wheel-only installs on Android (no toolchains). Users can override by passing
+					   --no-binary/--only-binary/--use-pep517/--no-use-pep517/--no-build-isolation explicitly. */
+					"pip(){ "
+						"if [ \"$1\" = \"install\" ]; then "
+							"shift; "
+							"_kugutz_add=1; "
+							"for _a in \"$@\"; do "
+								"case \"$_a\" in "
+									"--only-binary*|--no-binary*|--prefer-binary|--no-build-isolation|--use-pep517|--no-use-pep517) _kugutz_add=0;; "
+								"esac; "
+							"done; "
+							"if [ \"$_kugutz_add\" = \"1\" ]; then "
+								"%s/libkugutzpy.so -m pip install --only-binary=:all: --prefer-binary \"$@\"; "
+							"else "
+								"%s/libkugutzpy.so -m pip install \"$@\"; "
+							"fi; "
+							"return $?; "
+						"fi; "
+						"%s/libkugutzpy.so -m pip \"$@\"; "
+					"}; "
 					"pip3(){ pip \"$@\"; }; "
 					/* Auto-bootstrap uv on first use if the module isn't installed yet. */
 					"uv(){ %s/libkugutzpy.so -c 'import importlib.util,sys;sys.exit(0 if importlib.util.find_spec(\"uv\") else 1)'; "
@@ -1143,7 +1162,7 @@ static void execchild(const void *user_data) {
 					"dbclient(){ ssh \"$@\"; }; "
 					"scp(){ %s/libscp.so -S %s/libdbclient.so \"$@\"; }; "
 					"dropbearkey(){ %s/libdropbearkey.so \"$@\"; }; ",
-					nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib);
+					nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib);
 			}
 		}
 
