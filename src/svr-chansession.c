@@ -1003,22 +1003,28 @@ static void execchild(const void *user_data) {
 	char *saved_kugutz_home = NULL;
 	char *saved_kugutz_pyenv = NULL;
 	char *saved_kugutz_nativelib = NULL;
+	char *saved_kugutz_wheelhouse = NULL;
 	char *saved_ld_library_path = NULL;
 	char *saved_pythonhome = NULL;
 	char *saved_pythonpath = NULL;
 	char *saved_ssl_cert_file = NULL;
 	char *saved_pip_cert = NULL;
+	char *saved_pip_find_links = NULL;
+	char *saved_requests_ca_bundle = NULL;
 	{
 		const char *v;
 		if ((v = getenv("PATH")) && v[0]) saved_path = m_strdup(v);
 		if ((v = getenv("KUGUTZ_HOME")) && v[0]) saved_kugutz_home = m_strdup(v);
 		if ((v = getenv("KUGUTZ_PYENV")) && v[0]) saved_kugutz_pyenv = m_strdup(v);
 		if ((v = getenv("KUGUTZ_NATIVELIB")) && v[0]) saved_kugutz_nativelib = m_strdup(v);
+		if ((v = getenv("KUGUTZ_WHEELHOUSE")) && v[0]) saved_kugutz_wheelhouse = m_strdup(v);
 		if ((v = getenv("LD_LIBRARY_PATH")) && v[0]) saved_ld_library_path = m_strdup(v);
 		if ((v = getenv("PYTHONHOME")) && v[0]) saved_pythonhome = m_strdup(v);
 		if ((v = getenv("PYTHONPATH")) && v[0]) saved_pythonpath = m_strdup(v);
 		if ((v = getenv("SSL_CERT_FILE")) && v[0]) saved_ssl_cert_file = m_strdup(v);
 		if ((v = getenv("PIP_CERT")) && v[0]) saved_pip_cert = m_strdup(v);
+		if ((v = getenv("PIP_FIND_LINKS")) && v[0]) saved_pip_find_links = m_strdup(v);
+		if ((v = getenv("REQUESTS_CA_BUNDLE")) && v[0]) saved_requests_ca_bundle = m_strdup(v);
 	}
 
 	/* clear environment if -e was not set */
@@ -1058,11 +1064,14 @@ static void execchild(const void *user_data) {
 	if (saved_kugutz_home) addnewvar("KUGUTZ_HOME", saved_kugutz_home);
 	if (saved_kugutz_pyenv) addnewvar("KUGUTZ_PYENV", saved_kugutz_pyenv);
 	if (saved_kugutz_nativelib) addnewvar("KUGUTZ_NATIVELIB", saved_kugutz_nativelib);
+	if (saved_kugutz_wheelhouse) addnewvar("KUGUTZ_WHEELHOUSE", saved_kugutz_wheelhouse);
 	if (saved_ld_library_path) addnewvar("LD_LIBRARY_PATH", saved_ld_library_path);
 	if (saved_pythonhome) addnewvar("PYTHONHOME", saved_pythonhome);
 	if (saved_pythonpath) addnewvar("PYTHONPATH", saved_pythonpath);
 	if (saved_ssl_cert_file) addnewvar("SSL_CERT_FILE", saved_ssl_cert_file);
 	if (saved_pip_cert) addnewvar("PIP_CERT", saved_pip_cert);
+	if (saved_pip_find_links) addnewvar("PIP_FIND_LINKS", saved_pip_find_links);
+	if (saved_requests_ca_bundle) addnewvar("REQUESTS_CA_BUNDLE", saved_requests_ca_bundle);
 	if (cp != NULL) {
 		addnewvar("LANG", cp);
 		m_free(cp);
