@@ -637,7 +637,7 @@ static long select_timeout() {
 }
 
 const char* get_user_shell() {
-	const char* env_shell = getenv("KUGUTZ_SHELL");
+	const char* env_shell = getenv("METHINGS_SHELL");
 	if (env_shell && env_shell[0] != '\0') {
 		return env_shell;
 	}

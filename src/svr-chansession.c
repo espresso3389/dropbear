@@ -997,13 +997,13 @@ static void execchild(const void *user_data) {
 	seedrandom();
 #endif
 
-	/* Save Kugutz environment vars BEFORE clearenv() wipes them.
+	/* Save Methings environment vars BEFORE clearenv() wipes them.
 	   These are set by SshdManager and need to reach child sessions. */
 	char *saved_path = NULL;
-	char *saved_kugutz_home = NULL;
-	char *saved_kugutz_pyenv = NULL;
-	char *saved_kugutz_nativelib = NULL;
-	char *saved_kugutz_wheelhouse = NULL;
+	char *saved_methings_home = NULL;
+	char *saved_methings_pyenv = NULL;
+	char *saved_methings_nativelib = NULL;
+	char *saved_methings_wheelhouse = NULL;
 	char *saved_ld_library_path = NULL;
 	char *saved_pythonhome = NULL;
 	char *saved_pythonpath = NULL;
@@ -1014,10 +1014,10 @@ static void execchild(const void *user_data) {
 	{
 		const char *v;
 		if ((v = getenv("PATH")) && v[0]) saved_path = m_strdup(v);
-		if ((v = getenv("KUGUTZ_HOME")) && v[0]) saved_kugutz_home = m_strdup(v);
-		if ((v = getenv("KUGUTZ_PYENV")) && v[0]) saved_kugutz_pyenv = m_strdup(v);
-		if ((v = getenv("KUGUTZ_NATIVELIB")) && v[0]) saved_kugutz_nativelib = m_strdup(v);
-		if ((v = getenv("KUGUTZ_WHEELHOUSE")) && v[0]) saved_kugutz_wheelhouse = m_strdup(v);
+		if ((v = getenv("METHINGS_HOME")) && v[0]) saved_methings_home = m_strdup(v);
+		if ((v = getenv("METHINGS_PYENV")) && v[0]) saved_methings_pyenv = m_strdup(v);
+		if ((v = getenv("METHINGS_NATIVELIB")) && v[0]) saved_methings_nativelib = m_strdup(v);
+		if ((v = getenv("METHINGS_WHEELHOUSE")) && v[0]) saved_methings_wheelhouse = m_strdup(v);
 		if ((v = getenv("LD_LIBRARY_PATH")) && v[0]) saved_ld_library_path = m_strdup(v);
 		if ((v = getenv("PYTHONHOME")) && v[0]) saved_pythonhome = m_strdup(v);
 		if ((v = getenv("PYTHONPATH")) && v[0]) saved_pythonpath = m_strdup(v);
@@ -1060,11 +1060,11 @@ static void execchild(const void *user_data) {
 		addnewvar("PATH", DEFAULT_PATH);
 	}
 
-	/* Restore Kugutz environment for child sessions. */
-	if (saved_kugutz_home) addnewvar("KUGUTZ_HOME", saved_kugutz_home);
-	if (saved_kugutz_pyenv) addnewvar("KUGUTZ_PYENV", saved_kugutz_pyenv);
-	if (saved_kugutz_nativelib) addnewvar("KUGUTZ_NATIVELIB", saved_kugutz_nativelib);
-	if (saved_kugutz_wheelhouse) addnewvar("KUGUTZ_WHEELHOUSE", saved_kugutz_wheelhouse);
+	/* Restore Methings environment for child sessions. */
+	if (saved_methings_home) addnewvar("METHINGS_HOME", saved_methings_home);
+	if (saved_methings_pyenv) addnewvar("METHINGS_PYENV", saved_methings_pyenv);
+	if (saved_methings_nativelib) addnewvar("METHINGS_NATIVELIB", saved_methings_nativelib);
+	if (saved_methings_wheelhouse) addnewvar("METHINGS_WHEELHOUSE", saved_methings_wheelhouse);
 	if (saved_ld_library_path) addnewvar("LD_LIBRARY_PATH", saved_ld_library_path);
 	if (saved_pythonhome) addnewvar("PYTHONHOME", saved_pythonhome);
 	if (saved_pythonpath) addnewvar("PYTHONPATH", saved_pythonpath);
@@ -1123,42 +1123,42 @@ static void execchild(const void *user_data) {
 #if defined(__ANDROID__)
 	/* Build shell function preamble that maps commands to native lib binaries.
 	   This avoids SELinux issues with symlinks/scripts in app_data_file. */
-	char *kugutz_preamble = NULL;
+	char *methings_preamble = NULL;
 	{
-		const char *nlib = getenv("KUGUTZ_NATIVELIB");
+		const char *nlib = getenv("METHINGS_NATIVELIB");
 		if (nlib && nlib[0]) {
 				size_t plen = strlen(nlib) * 16 + 4096;
-			kugutz_preamble = m_malloc(plen);
-				snprintf(kugutz_preamble, plen,
-					"python3(){ %s/libkugutzpy.so \"$@\"; }; "
+			methings_preamble = m_malloc(plen);
+				snprintf(methings_preamble, plen,
+					"python3(){ %s/libmethingspy.so \"$@\"; }; "
 					"python(){ python3 \"$@\"; }; "
 					/* Default to wheel-only installs on Android (no toolchains). Users can override by passing
 					   --no-binary/--only-binary/--use-pep517/--no-use-pep517/--no-build-isolation explicitly. */
 					"pip(){ "
 						"if [ \"$1\" = \"install\" ]; then "
 							"shift; "
-							"_kugutz_add=1; "
+							"_methings_add=1; "
 							"for _a in \"$@\"; do "
 								"case \"$_a\" in "
-									"--only-binary*|--no-binary*|--prefer-binary|--no-build-isolation|--use-pep517|--no-use-pep517) _kugutz_add=0;; "
+									"--only-binary*|--no-binary*|--prefer-binary|--no-build-isolation|--use-pep517|--no-use-pep517) _methings_add=0;; "
 								"esac; "
 							"done; "
-							"if [ \"$_kugutz_add\" = \"1\" ]; then "
-								"%s/libkugutzpy.so -m pip install --only-binary=:all: --prefer-binary \"$@\"; "
+							"if [ \"$_methings_add\" = \"1\" ]; then "
+								"%s/libmethingspy.so -m pip install --only-binary=:all: --prefer-binary \"$@\"; "
 							"else "
-								"%s/libkugutzpy.so -m pip install \"$@\"; "
+								"%s/libmethingspy.so -m pip install \"$@\"; "
 							"fi; "
 							"return $?; "
 						"fi; "
-						"%s/libkugutzpy.so -m pip \"$@\"; "
+						"%s/libmethingspy.so -m pip \"$@\"; "
 					"}; "
 					"pip3(){ pip \"$@\"; }; "
 					/* Auto-bootstrap uv on first use if the module isn't installed yet. */
-					"uv(){ %s/libkugutzpy.so -c 'import importlib.util,sys;sys.exit(0 if importlib.util.find_spec(\"uv\") else 1)'; "
-						"if [ $? -ne 0 ]; then %s/libkugutzpy.so -m pip install uv || return $?; fi; "
-						"%s/libkugutzpy.so -m uv \"$@\"; }; "
+					"uv(){ %s/libmethingspy.so -c 'import importlib.util,sys;sys.exit(0 if importlib.util.find_spec(\"uv\") else 1)'; "
+						"if [ $? -ne 0 ]; then %s/libmethingspy.so -m pip install uv || return $?; fi; "
+						"%s/libmethingspy.so -m uv \"$@\"; }; "
 					"uvx(){ uv tool run \"$@\"; }; "
-					"curl(){ %s/libkugutzpy.so -c 'import json,os,shlex,sys,urllib.request;"
+					"curl(){ %s/libmethingspy.so -c 'import json,os,shlex,sys,urllib.request;"
 						"u=\"http://127.0.0.1:8765/shell/exec\";"
 						"d=json.dumps({\"cmd\":\"curl\",\"args\":shlex.join(sys.argv[1:]),\"cwd\":os.getcwd()}).encode();"
 						"req=urllib.request.Request(u,data=d,headers={\"Content-Type\":\"application/json\"});"
@@ -1176,7 +1176,7 @@ static void execchild(const void *user_data) {
 		}
 
 	if (chansess->cmd == NULL && chansess->term == NULL) {
-		const char *prompt = "kugutz> ";
+		const char *prompt = "methings> ";
 		char linebuf[1024];
 		while (1) {
 			size_t pos = 0;
@@ -1220,11 +1220,11 @@ static void execchild(const void *user_data) {
 			}
 			pid_t pid = fork();
 			if (pid == 0) {
-				if (kugutz_preamble) {
+				if (methings_preamble) {
 					/* Prepend function defs so python3/pip resolve correctly */
-					size_t wlen = strlen(kugutz_preamble) + strlen(linebuf) + 1;
+					size_t wlen = strlen(methings_preamble) + strlen(linebuf) + 1;
 					char *wrapped = m_malloc(wlen);
-					snprintf(wrapped, wlen, "%s%s", kugutz_preamble, linebuf);
+					snprintf(wrapped, wlen, "%s%s", methings_preamble, linebuf);
 					execl("/system/bin/sh", "sh", "-c", wrapped, (char *)NULL);
 				} else {
 					execl("/system/bin/sh", "sh", "-c", linebuf, (char *)NULL);
@@ -1242,10 +1242,10 @@ static void execchild(const void *user_data) {
 	/* Wrap non-interactive commands with python3/pip function definitions */
 	{
 		const char *final_cmd = chansess->cmd;
-		if (chansess->cmd != NULL && kugutz_preamble) {
-			size_t wlen = strlen(kugutz_preamble) + strlen(chansess->cmd) + 1;
+		if (chansess->cmd != NULL && methings_preamble) {
+			size_t wlen = strlen(methings_preamble) + strlen(chansess->cmd) + 1;
 			char *wrapped = m_malloc(wlen);
-			snprintf(wrapped, wlen, "%s%s", kugutz_preamble, chansess->cmd);
+			snprintf(wrapped, wlen, "%s%s", methings_preamble, chansess->cmd);
 			final_cmd = wrapped;
 		}
 		usershell = m_strdup(get_user_shell());
