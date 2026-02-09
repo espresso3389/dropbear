@@ -1005,6 +1005,7 @@ static void execchild(const void *user_data) {
 	char *saved_methings_pyenv = NULL;
 	char *saved_methings_nativelib = NULL;
 	char *saved_methings_bindir = NULL;
+	char *saved_methings_node_root = NULL;
 	char *saved_methings_wheelhouse = NULL;
 	char *saved_ld_library_path = NULL;
 	char *saved_pythonhome = NULL;
@@ -1021,6 +1022,7 @@ static void execchild(const void *user_data) {
 		if ((v = getenv("METHINGS_PYENV")) && v[0]) saved_methings_pyenv = m_strdup(v);
 		if ((v = getenv("METHINGS_NATIVELIB")) && v[0]) saved_methings_nativelib = m_strdup(v);
 		if ((v = getenv("METHINGS_BINDIR")) && v[0]) saved_methings_bindir = m_strdup(v);
+		if ((v = getenv("METHINGS_NODE_ROOT")) && v[0]) saved_methings_node_root = m_strdup(v);
 		if ((v = getenv("METHINGS_WHEELHOUSE")) && v[0]) saved_methings_wheelhouse = m_strdup(v);
 		if ((v = getenv("LD_LIBRARY_PATH")) && v[0]) saved_ld_library_path = m_strdup(v);
 		if ((v = getenv("PYTHONHOME")) && v[0]) saved_pythonhome = m_strdup(v);
@@ -1070,6 +1072,7 @@ static void execchild(const void *user_data) {
 	if (saved_methings_pyenv) addnewvar("METHINGS_PYENV", saved_methings_pyenv);
 	if (saved_methings_nativelib) addnewvar("METHINGS_NATIVELIB", saved_methings_nativelib);
 	if (saved_methings_bindir) addnewvar("METHINGS_BINDIR", saved_methings_bindir);
+	if (saved_methings_node_root) addnewvar("METHINGS_NODE_ROOT", saved_methings_node_root);
 	if (saved_methings_wheelhouse) addnewvar("METHINGS_WHEELHOUSE", saved_methings_wheelhouse);
 	if (saved_ld_library_path) addnewvar("LD_LIBRARY_PATH", saved_ld_library_path);
 	if (saved_pythonhome) addnewvar("PYTHONHOME", saved_pythonhome);
@@ -1267,6 +1270,10 @@ static void execchild(const void *user_data) {
 					/* Node.js runtime (Termux-built) + npm/corepack assets (extracted by the app).
 					   This provides a Node-compatible shell environment when present. */
 					"if [ -x \"${METHINGS_NATIVELIB}/libnode.so\" ]; then "
+						/* npm runs lifecycle scripts via /system/bin/sh -c and won't source $ENV.
+						   Force script-shell to our custom shell binary (nativeLibraryDir, executable). */
+						"export npm_config_script_shell=\"${METHINGS_NATIVELIB}/libmethingssh.so\"; "
+						"export NPM_CONFIG_SCRIPT_SHELL=\"${METHINGS_NATIVELIB}/libmethingssh.so\"; "
 						"node(){ "
 							"_nr=\"${METHINGS_NODE_ROOT:-}\"; "
 							"if [ -z \"$_nr\" ]; then _nr=\"${METHINGS_HOME}/../node\"; fi; "
