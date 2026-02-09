@@ -608,12 +608,12 @@ static int sessionpty(struct ChanSess * chansess) {
 		return DROPBEAR_FAILURE;
 	}
 #ifdef __ANDROID__
+	/* Most Android user builds don't expose a usable devpts mount to app sandboxes. */
 	dropbear_log(LOG_WARNING, "pty requested but unsupported; rejecting pty request");
 	m_free(chansess->term);
 	chansess->term = NULL;
 	return DROPBEAR_FAILURE;
 #endif
-
 	/* allocate the pty */
 	if (chansess->master != -1) {
 		dropbear_exit("Multiple pty requests");
@@ -1000,9 +1000,11 @@ static void execchild(const void *user_data) {
 	/* Save Methings environment vars BEFORE clearenv() wipes them.
 	   These are set by SshdManager and need to reach child sessions. */
 	char *saved_path = NULL;
+	char *saved_env = NULL;
 	char *saved_methings_home = NULL;
 	char *saved_methings_pyenv = NULL;
 	char *saved_methings_nativelib = NULL;
+	char *saved_methings_bindir = NULL;
 	char *saved_methings_wheelhouse = NULL;
 	char *saved_ld_library_path = NULL;
 	char *saved_pythonhome = NULL;
@@ -1014,9 +1016,11 @@ static void execchild(const void *user_data) {
 	{
 		const char *v;
 		if ((v = getenv("PATH")) && v[0]) saved_path = m_strdup(v);
+		if ((v = getenv("ENV")) && v[0]) saved_env = m_strdup(v);
 		if ((v = getenv("METHINGS_HOME")) && v[0]) saved_methings_home = m_strdup(v);
 		if ((v = getenv("METHINGS_PYENV")) && v[0]) saved_methings_pyenv = m_strdup(v);
 		if ((v = getenv("METHINGS_NATIVELIB")) && v[0]) saved_methings_nativelib = m_strdup(v);
+		if ((v = getenv("METHINGS_BINDIR")) && v[0]) saved_methings_bindir = m_strdup(v);
 		if ((v = getenv("METHINGS_WHEELHOUSE")) && v[0]) saved_methings_wheelhouse = m_strdup(v);
 		if ((v = getenv("LD_LIBRARY_PATH")) && v[0]) saved_ld_library_path = m_strdup(v);
 		if ((v = getenv("PYTHONHOME")) && v[0]) saved_pythonhome = m_strdup(v);
@@ -1061,9 +1065,11 @@ static void execchild(const void *user_data) {
 	}
 
 	/* Restore Methings environment for child sessions. */
+	if (saved_env) addnewvar("ENV", saved_env);
 	if (saved_methings_home) addnewvar("METHINGS_HOME", saved_methings_home);
 	if (saved_methings_pyenv) addnewvar("METHINGS_PYENV", saved_methings_pyenv);
 	if (saved_methings_nativelib) addnewvar("METHINGS_NATIVELIB", saved_methings_nativelib);
+	if (saved_methings_bindir) addnewvar("METHINGS_BINDIR", saved_methings_bindir);
 	if (saved_methings_wheelhouse) addnewvar("METHINGS_WHEELHOUSE", saved_methings_wheelhouse);
 	if (saved_ld_library_path) addnewvar("LD_LIBRARY_PATH", saved_ld_library_path);
 	if (saved_pythonhome) addnewvar("PYTHONHOME", saved_pythonhome);
@@ -1167,11 +1173,52 @@ static void execchild(const void *user_data) {
 						"out=o.get(\"output\",\"\");"
 						"sys.stdout.write(out if isinstance(out,str) else str(out));"
 						"raise SystemExit(int(o.get(\"code\",1)))' \"$@\"; }; "
-					"ssh(){ %s/libdbclient.so \"$@\"; }; "
+					/* Default ssh wrapper:
+					   - Auto-accept unknown host keys (-y) unless the user already supplied -y.
+					   - If the caller tries to open an interactive session but this shell doesn't
+					     have a TTY, fail fast with a clear message (otherwise it looks "hung"). */
+					"ssh(){ "
+						"want_y=1; "
+						"for a in \"$@\"; do "
+							"case \"$a\" in "
+								"-y) want_y=0;; "
+							"esac; "
+						"done; "
+						"if [ \"$want_y\" = 1 ]; then set -- -y \"$@\"; fi; "
+						"_m_has_cmd=0; _m_seen_host=0; _m_skip=0; _m_end_opts=0; "
+						"for a in \"$@\"; do "
+							"if [ \"$_m_skip\" = 1 ]; then _m_skip=0; continue; fi; "
+								"if [ \"$_m_seen_host\" = 0 ]; then "
+									"if [ \"$_m_end_opts\" = 1 ]; then _m_seen_host=1; _m_end_opts=0; continue; fi; "
+									"case \"$a\" in "
+										"--) _m_end_opts=1;; "
+										"-p|-l|-i|-c|-m|-W|-K|-I|-o|-J|-b|-L|-R|-B|-s) _m_skip=1;; "
+										"-*) ;; "
+										"*) _m_seen_host=1;; "
+									"esac; "
+								"continue; "
+							"fi; "
+							"_m_has_cmd=1; break; "
+						"done; "
+						"if [ \"$_m_seen_host\" = 1 ] && [ \"$_m_has_cmd\" = 0 ] && ! test -t 0; then "
+							"echo \"ssh: interactive sessions require a TTY. Use: ssh user@host <command>\" 1>&2; "
+							"return 2; "
+						"fi; "
+						"%s/libdbclient.so \"$@\"; "
+					"}; "
 					"dbclient(){ ssh \"$@\"; }; "
-					"scp(){ %s/libscp.so -S %s/libdbclient.so \"$@\"; }; "
-					"dropbearkey(){ %s/libdropbearkey.so \"$@\"; }; ",
-					nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib);
+						/* scp needs a program path for -S; use an executable in nativeLibraryDir. */
+						"scp(){ "
+							"have_s=0; "
+							"for a in \"$@\"; do case \"$a\" in -S) have_s=1;; esac; done; "
+							"if [ \"$have_s\" = 1 ]; then "
+								"%s/libscp.so \"$@\"; "
+							"else "
+								"%s/libscp.so -S %s/libmethingsdbclientwrap.so \"$@\"; "
+							"fi; "
+						"}; "
+						"dropbearkey(){ %s/libdropbearkey.so \"$@\"; }; ",
+					nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib);
 			}
 		}
 
