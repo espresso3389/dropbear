@@ -1263,7 +1263,7 @@ static void execchild(const void *user_data) {
 							"[Convert]::ToBase64String($b)\\\"\" | base64 -d > \"$_l\"; "
 					"}; "
 					/* Node.js runtime (Termux-built) + npm/corepack assets (extracted by the app).
-					   This is not Bun, but provides a Node-compatible shell environment when present. */
+					   This provides a Node-compatible shell environment when present. */
 					"if [ -x \"${METHINGS_NATIVELIB}/libnode.so\" ]; then "
 						"node(){ \"${METHINGS_NATIVELIB}/libnode.so\" \"$@\"; }; "
 						"npm(){ "
