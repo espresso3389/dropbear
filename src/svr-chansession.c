@@ -1133,7 +1133,9 @@ static void execchild(const void *user_data) {
 	{
 		const char *nlib = getenv("METHINGS_NATIVELIB");
 		if (nlib && nlib[0]) {
-				size_t plen = strlen(nlib) * 16 + 4096;
+			/* The preamble is a large shell snippet; keep plenty of headroom so snprintf() doesn't
+			   truncate (truncation can break quoting and cause confusing shell errors). */
+			size_t plen = strlen(nlib) * 32 + 16384;
 			methings_preamble = m_malloc(plen);
 				snprintf(methings_preamble, plen,
 					"python3(){ %s/libmethingspy.so \"$@\"; }; "
@@ -1265,24 +1267,32 @@ static void execchild(const void *user_data) {
 					/* Node.js runtime (Termux-built) + npm/corepack assets (extracted by the app).
 					   This provides a Node-compatible shell environment when present. */
 					"if [ -x \"${METHINGS_NATIVELIB}/libnode.so\" ]; then "
-						"node(){ \"${METHINGS_NATIVELIB}/libnode.so\" \"$@\"; }; "
+						"node(){ "
+							"_nr=\"${METHINGS_NODE_ROOT:-}\"; "
+							"if [ -z \"$_nr\" ]; then _nr=\"${METHINGS_HOME}/../node\"; fi; "
+							"LD_LIBRARY_PATH=\"$_nr/lib:${LD_LIBRARY_PATH:-}\" "
+							"\"${METHINGS_NATIVELIB}/libnode.so\" \"$@\"; "
+						"}; "
 						"npm(){ "
 							"_nr=\"${METHINGS_NODE_ROOT:-}\"; "
-							"if [ -z \"$_nr\" ]; then _nr=\"${METHINGS_HOME%/user}/node\"; fi; "
+							"if [ -z \"$_nr\" ]; then _nr=\"${METHINGS_HOME}/../node\"; fi; "
+							"LD_LIBRARY_PATH=\"$_nr/lib:${LD_LIBRARY_PATH:-}\" "
 							"NPM_CONFIG_PREFIX=\"${METHINGS_HOME}/npm-prefix\" "
 							"NPM_CONFIG_CACHE=\"${METHINGS_HOME}/npm-cache\" "
 							"\"${METHINGS_NATIVELIB}/libnode.so\" \"$_nr/usr/lib/node_modules/npm/bin/npm-cli.js\" \"$@\"; "
 						"}; "
 						"npx(){ "
 							"_nr=\"${METHINGS_NODE_ROOT:-}\"; "
-							"if [ -z \"$_nr\" ]; then _nr=\"${METHINGS_HOME%/user}/node\"; fi; "
+							"if [ -z \"$_nr\" ]; then _nr=\"${METHINGS_HOME}/../node\"; fi; "
+							"LD_LIBRARY_PATH=\"$_nr/lib:${LD_LIBRARY_PATH:-}\" "
 							"NPM_CONFIG_PREFIX=\"${METHINGS_HOME}/npm-prefix\" "
 							"NPM_CONFIG_CACHE=\"${METHINGS_HOME}/npm-cache\" "
 							"\"${METHINGS_NATIVELIB}/libnode.so\" \"$_nr/usr/lib/node_modules/npm/bin/npx-cli.js\" \"$@\"; "
 						"}; "
 						"corepack(){ "
 							"_nr=\"${METHINGS_NODE_ROOT:-}\"; "
-							"if [ -z \"$_nr\" ]; then _nr=\"${METHINGS_HOME%/user}/node\"; fi; "
+							"if [ -z \"$_nr\" ]; then _nr=\"${METHINGS_HOME}/../node\"; fi; "
+							"LD_LIBRARY_PATH=\"$_nr/lib:${LD_LIBRARY_PATH:-}\" "
 							"\"${METHINGS_NATIVELIB}/libnode.so\" \"$_nr/usr/lib/node_modules/corepack/dist/corepack.js\" \"$@\"; "
 						"}; "
 					"fi; "
