@@ -997,7 +997,7 @@ static void execchild(const void *user_data) {
 	seedrandom();
 #endif
 
-	/* Save Methings environment vars BEFORE clearenv() wipes them.
+	/* Save me.things environment vars BEFORE clearenv() wipes them.
 	   These are set by SshdManager and need to reach child sessions. */
 	char *saved_path = NULL;
 	char *saved_env = NULL;
@@ -1066,7 +1066,7 @@ static void execchild(const void *user_data) {
 		addnewvar("PATH", DEFAULT_PATH);
 	}
 
-	/* Restore Methings environment for child sessions. */
+	/* Restore me.things environment for child sessions. */
 	if (saved_env) addnewvar("ENV", saved_env);
 	if (saved_methings_home) addnewvar("METHINGS_HOME", saved_methings_home);
 	if (saved_methings_pyenv) addnewvar("METHINGS_PYENV", saved_methings_pyenv);
