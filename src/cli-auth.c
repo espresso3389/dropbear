@@ -32,6 +32,28 @@
 #include "packet.h"
 #include "runopts.h"
 
+#ifdef __ANDROID__
+/* Android Bionic libc doesn't provide getpass(). */
+#include <termios.h>
+static char *getpass(const char *prompt) {
+	static char buf[128];
+	struct termios old, cur;
+	fprintf(stderr, "%s", prompt);
+	if (tcgetattr(STDIN_FILENO, &old) != 0) return NULL;
+	cur = old;
+	cur.c_lflag &= ~(tcflag_t)ECHO;
+	tcsetattr(STDIN_FILENO, TCSANOW, &cur);
+	if (fgets(buf, sizeof(buf), stdin) == NULL) {
+		tcsetattr(STDIN_FILENO, TCSANOW, &old);
+		return NULL;
+	}
+	tcsetattr(STDIN_FILENO, TCSANOW, &old);
+	fprintf(stderr, "\n");
+	buf[strcspn(buf, "\n")] = 0;
+	return buf;
+}
+#endif
+
 /* Send a "none" auth request to get available methods */
 void cli_auth_getmethods() {
 	TRACE(("enter cli_auth_getmethods"))

@@ -608,12 +608,12 @@ static int sessionpty(struct ChanSess * chansess) {
 		return DROPBEAR_FAILURE;
 	}
 #ifdef __ANDROID__
+	/* Most Android user builds don't expose a usable devpts mount to app sandboxes. */
 	dropbear_log(LOG_WARNING, "pty requested but unsupported; rejecting pty request");
 	m_free(chansess->term);
 	chansess->term = NULL;
 	return DROPBEAR_FAILURE;
 #endif
-
 	/* allocate the pty */
 	if (chansess->master != -1) {
 		dropbear_exit("Multiple pty requests");
@@ -997,6 +997,42 @@ static void execchild(const void *user_data) {
 	seedrandom();
 #endif
 
+	/* Save Methings environment vars BEFORE clearenv() wipes them.
+	   These are set by SshdManager and need to reach child sessions. */
+	char *saved_path = NULL;
+	char *saved_env = NULL;
+	char *saved_methings_home = NULL;
+	char *saved_methings_pyenv = NULL;
+	char *saved_methings_nativelib = NULL;
+	char *saved_methings_bindir = NULL;
+	char *saved_methings_node_root = NULL;
+	char *saved_methings_wheelhouse = NULL;
+	char *saved_ld_library_path = NULL;
+	char *saved_pythonhome = NULL;
+	char *saved_pythonpath = NULL;
+	char *saved_ssl_cert_file = NULL;
+	char *saved_pip_cert = NULL;
+	char *saved_pip_find_links = NULL;
+	char *saved_requests_ca_bundle = NULL;
+	{
+		const char *v;
+		if ((v = getenv("PATH")) && v[0]) saved_path = m_strdup(v);
+		if ((v = getenv("ENV")) && v[0]) saved_env = m_strdup(v);
+		if ((v = getenv("METHINGS_HOME")) && v[0]) saved_methings_home = m_strdup(v);
+		if ((v = getenv("METHINGS_PYENV")) && v[0]) saved_methings_pyenv = m_strdup(v);
+		if ((v = getenv("METHINGS_NATIVELIB")) && v[0]) saved_methings_nativelib = m_strdup(v);
+		if ((v = getenv("METHINGS_BINDIR")) && v[0]) saved_methings_bindir = m_strdup(v);
+		if ((v = getenv("METHINGS_NODE_ROOT")) && v[0]) saved_methings_node_root = m_strdup(v);
+		if ((v = getenv("METHINGS_WHEELHOUSE")) && v[0]) saved_methings_wheelhouse = m_strdup(v);
+		if ((v = getenv("LD_LIBRARY_PATH")) && v[0]) saved_ld_library_path = m_strdup(v);
+		if ((v = getenv("PYTHONHOME")) && v[0]) saved_pythonhome = m_strdup(v);
+		if ((v = getenv("PYTHONPATH")) && v[0]) saved_pythonpath = m_strdup(v);
+		if ((v = getenv("SSL_CERT_FILE")) && v[0]) saved_ssl_cert_file = m_strdup(v);
+		if ((v = getenv("PIP_CERT")) && v[0]) saved_pip_cert = m_strdup(v);
+		if ((v = getenv("PIP_FIND_LINKS")) && v[0]) saved_pip_find_links = m_strdup(v);
+		if ((v = getenv("REQUESTS_CA_BUNDLE")) && v[0]) saved_requests_ca_bundle = m_strdup(v);
+	}
+
 	/* clear environment if -e was not set */
 	/* if we're debugging using valgrind etc, we need to keep the LD_PRELOAD
 	 * etc. This is hazardous, so should only be used for debugging. */
@@ -1022,11 +1058,29 @@ static void execchild(const void *user_data) {
 	addnewvar("LOGNAME", ses.authstate.pw_name);
 	addnewvar("HOME", ses.authstate.pw_dir);
 	addnewvar("SHELL", get_user_shell());
-	if (getuid() == 0) {
+	if (saved_path) {
+		addnewvar("PATH", saved_path);
+	} else if (getuid() == 0) {
 		addnewvar("PATH", DEFAULT_ROOT_PATH);
 	} else {
 		addnewvar("PATH", DEFAULT_PATH);
 	}
+
+	/* Restore Methings environment for child sessions. */
+	if (saved_env) addnewvar("ENV", saved_env);
+	if (saved_methings_home) addnewvar("METHINGS_HOME", saved_methings_home);
+	if (saved_methings_pyenv) addnewvar("METHINGS_PYENV", saved_methings_pyenv);
+	if (saved_methings_nativelib) addnewvar("METHINGS_NATIVELIB", saved_methings_nativelib);
+	if (saved_methings_bindir) addnewvar("METHINGS_BINDIR", saved_methings_bindir);
+	if (saved_methings_node_root) addnewvar("METHINGS_NODE_ROOT", saved_methings_node_root);
+	if (saved_methings_wheelhouse) addnewvar("METHINGS_WHEELHOUSE", saved_methings_wheelhouse);
+	if (saved_ld_library_path) addnewvar("LD_LIBRARY_PATH", saved_ld_library_path);
+	if (saved_pythonhome) addnewvar("PYTHONHOME", saved_pythonhome);
+	if (saved_pythonpath) addnewvar("PYTHONPATH", saved_pythonpath);
+	if (saved_ssl_cert_file) addnewvar("SSL_CERT_FILE", saved_ssl_cert_file);
+	if (saved_pip_cert) addnewvar("PIP_CERT", saved_pip_cert);
+	if (saved_pip_find_links) addnewvar("PIP_FIND_LINKS", saved_pip_find_links);
+	if (saved_requests_ca_bundle) addnewvar("REQUESTS_CA_BUNDLE", saved_requests_ca_bundle);
 	if (cp != NULL) {
 		addnewvar("LANG", cp);
 		m_free(cp);
@@ -1076,8 +1130,186 @@ static void execchild(const void *user_data) {
 #endif
 
 #if defined(__ANDROID__)
+	/* Build shell function preamble that maps commands to native lib binaries.
+	   This avoids SELinux issues with symlinks/scripts in app_data_file. */
+	char *methings_preamble = NULL;
+	{
+		const char *nlib = getenv("METHINGS_NATIVELIB");
+		if (nlib && nlib[0]) {
+			/* The preamble is a large shell snippet; keep plenty of headroom so snprintf() doesn't
+			   truncate (truncation can break quoting and cause confusing shell errors). */
+			size_t plen = strlen(nlib) * 32 + 16384;
+			methings_preamble = m_malloc(plen);
+				snprintf(methings_preamble, plen,
+					"python3(){ %s/libmethingspy.so \"$@\"; }; "
+					"python(){ python3 \"$@\"; }; "
+					/* Default to wheel-only installs on Android (no toolchains). Users can override by passing
+					   --no-binary/--only-binary/--use-pep517/--no-use-pep517/--no-build-isolation explicitly. */
+					"pip(){ "
+						"if [ \"$1\" = \"install\" ]; then "
+							"shift; "
+							"_methings_add=1; "
+							"for _a in \"$@\"; do "
+								"case \"$_a\" in "
+									"--only-binary*|--no-binary*|--prefer-binary|--no-build-isolation|--use-pep517|--no-use-pep517) _methings_add=0;; "
+								"esac; "
+							"done; "
+							"if [ \"$_methings_add\" = \"1\" ]; then "
+								"%s/libmethingspy.so -m pip install --only-binary=:all: --prefer-binary \"$@\"; "
+							"else "
+								"%s/libmethingspy.so -m pip install \"$@\"; "
+							"fi; "
+							"return $?; "
+						"fi; "
+						"%s/libmethingspy.so -m pip \"$@\"; "
+					"}; "
+					"pip3(){ pip \"$@\"; }; "
+					/* Auto-bootstrap uv on first use if the module isn't installed yet. */
+					"uv(){ %s/libmethingspy.so -c 'import importlib.util,sys;sys.exit(0 if importlib.util.find_spec(\"uv\") else 1)'; "
+						"if [ $? -ne 0 ]; then %s/libmethingspy.so -m pip install uv || return $?; fi; "
+						"%s/libmethingspy.so -m uv \"$@\"; }; "
+					"uvx(){ uv tool run \"$@\"; }; "
+					"curl(){ %s/libmethingspy.so -c 'import json,os,shlex,sys,urllib.request;"
+						"u=\"http://127.0.0.1:8765/shell/exec\";"
+						"d=json.dumps({\"cmd\":\"curl\",\"args\":shlex.join(sys.argv[1:]),\"cwd\":os.getcwd()}).encode();"
+						"req=urllib.request.Request(u,data=d,headers={\"Content-Type\":\"application/json\"});"
+						"r=urllib.request.urlopen(req,timeout=60);"
+						"o=json.loads(r.read().decode(\"utf-8\",errors=\"replace\"));"
+						"out=o.get(\"output\",\"\");"
+						"sys.stdout.write(out if isinstance(out,str) else str(out));"
+						"raise SystemExit(int(o.get(\"code\",1)))' \"$@\"; }; "
+					/* Default ssh wrapper:
+					   - Auto-accept unknown host keys (-y) unless the user already supplied -y.
+					   - If the caller tries to open an interactive session but this shell doesn't
+					     have a TTY, fail fast with a clear message (otherwise it looks "hung"). */
+					"ssh(){ "
+						"want_y=1; "
+						"for a in \"$@\"; do "
+							"case \"$a\" in "
+								"-y) want_y=0;; "
+							"esac; "
+						"done; "
+						"if [ \"$want_y\" = 1 ]; then set -- -y \"$@\"; fi; "
+						"_m_has_cmd=0; _m_seen_host=0; _m_skip=0; _m_end_opts=0; "
+						"for a in \"$@\"; do "
+							"if [ \"$_m_skip\" = 1 ]; then _m_skip=0; continue; fi; "
+								"if [ \"$_m_seen_host\" = 0 ]; then "
+									"if [ \"$_m_end_opts\" = 1 ]; then _m_seen_host=1; _m_end_opts=0; continue; fi; "
+									"case \"$a\" in "
+										"--) _m_end_opts=1;; "
+										"-p|-l|-i|-c|-m|-W|-K|-I|-o|-J|-b|-L|-R|-B|-s) _m_skip=1;; "
+										"-*) ;; "
+										"*) _m_seen_host=1;; "
+									"esac; "
+								"continue; "
+							"fi; "
+							"_m_has_cmd=1; break; "
+						"done; "
+						"if [ \"$_m_seen_host\" = 1 ] && [ \"$_m_has_cmd\" = 0 ] && ! test -t 0; then "
+							"echo \"ssh: interactive sessions require a TTY. Use: ssh user@host <command>\" 1>&2; "
+							"return 2; "
+						"fi; "
+						"%s/libdbclient.so \"$@\"; "
+					"}; "
+					"dbclient(){ ssh \"$@\"; }; "
+					/* scp needs a program path for -S; use an executable in nativeLibraryDir. */
+					"scp(){ "
+						"have_s=0; want_v=0; "
+						"if ! test -t 0; then want_v=1; fi; "
+						"for a in \"$@\"; do "
+							"case \"$a\" in "
+								"-S) have_s=1;; "
+								"-v) want_v=0;; "
+								"-q) want_v=0;; "
+							"esac; "
+						"done; "
+						"if [ \"$want_v\" = 1 ]; then set -- -v \"$@\"; fi; "
+						"if [ \"$have_s\" = 1 ]; then "
+							"%s/libscp.so \"$@\"; "
+						"else "
+							"%s/libscp.so -S %s/libmethingsdbclientwrap.so \"$@\"; "
+						"fi; "
+					"}; "
+					/* put/get: scp alternative for environments where the scp protocol stalls (notably some
+					   OpenSSH_for_Windows setups). Uses ssh + cat when available, otherwise PowerShell+base64. */
+					"put(){ "
+						"if [ $# -ne 2 ]; then echo \"usage: put <local_file> <user@host:remote_path_or_dir>\" 1>&2; return 2; fi; "
+						"_l=\"$1\"; _r=\"$2\"; "
+						"case \"$_r\" in *:*) :;; *) echo \"put: remote must be user@host:path\" 1>&2; return 2;; esac; "
+						"_h=\"${_r%%:*}\"; _p=\"${_r#*:}\"; "
+						"if [ -d \"$_l\" ]; then echo \"put: directories not supported\" 1>&2; return 2; fi; "
+						"_bn=\"$(basename \"$_l\")\"; "
+						"case \"$_p\" in */) _p=\"${_p}${_bn}\";; esac; "
+						"ssh \"$_h\" \"command -v cat >/dev/null 2>&1\" >/dev/null 2>&1; "
+						"if [ $? -eq 0 ]; then "
+							/* Tilde expansion doesn't work inside quotes. Allow unquoted ~ paths. */
+							"case \"$_p\" in ~*) ssh \"$_h\" \"cat > $_p\" < \"$_l\";; *) ssh \"$_h\" \"cat > \\\"$_p\\\"\" < \"$_l\";; esac; "
+							"return $?; "
+						"fi; "
+						"command -v base64 >/dev/null 2>&1 || { echo \"put: base64 not found\" 1>&2; return 127; }; "
+						"base64 \"$_l\" | ssh \"$_h\" "
+							"\"powershell -NoProfile -Command \\\"$b64=[Console]::In.ReadToEnd() -replace '\\\\s','';"
+							"$p='$_p'; if ($p.StartsWith('~/')) { $p=Join-Path $HOME $p.Substring(2) };"
+							"[IO.File]::WriteAllBytes($p,[Convert]::FromBase64String($b64))\\\"\"; "
+					"}; "
+					"get(){ "
+						"if [ $# -ne 2 ]; then echo \"usage: get <user@host:remote_file> <local_path>\" 1>&2; return 2; fi; "
+						"_r=\"$1\"; _l=\"$2\"; "
+						"case \"$_r\" in *:*) :;; *) echo \"get: remote must be user@host:path\" 1>&2; return 2;; esac; "
+						"_h=\"${_r%%:*}\"; _p=\"${_r#*:}\"; "
+						"ssh \"$_h\" \"command -v cat >/dev/null 2>&1\" >/dev/null 2>&1; "
+						"if [ $? -eq 0 ]; then "
+							"case \"$_p\" in ~*) ssh \"$_h\" \"cat $_p\" > \"$_l\";; *) ssh \"$_h\" \"cat \\\"$_p\\\"\" > \"$_l\";; esac; "
+							"return $?; "
+						"fi; "
+						"command -v base64 >/dev/null 2>&1 || { echo \"get: base64 not found\" 1>&2; return 127; }; "
+						"ssh \"$_h\" "
+							"\"powershell -NoProfile -Command \\\"$b=[IO.File]::ReadAllBytes('$_p');"
+							"[Convert]::ToBase64String($b)\\\"\" | base64 -d > \"$_l\"; "
+					"}; "
+					/* Node.js runtime (Termux-built) + npm/corepack assets (extracted by the app).
+					   This provides a Node-compatible shell environment when present. */
+					"if [ -x \"${METHINGS_NATIVELIB}/libnode.so\" ]; then "
+						/* npm runs lifecycle scripts via /system/bin/sh -c and won't source $ENV.
+						   Force script-shell to our custom shell binary (nativeLibraryDir, executable). */
+						"export npm_config_script_shell=\"${METHINGS_NATIVELIB}/libmethingssh.so\"; "
+						"export NPM_CONFIG_SCRIPT_SHELL=\"${METHINGS_NATIVELIB}/libmethingssh.so\"; "
+						"node(){ "
+							"_nr=\"${METHINGS_NODE_ROOT:-}\"; "
+							"if [ -z \"$_nr\" ]; then _nr=\"${METHINGS_HOME}/../node\"; fi; "
+							"LD_LIBRARY_PATH=\"$_nr/lib:${LD_LIBRARY_PATH:-}\" "
+							"\"${METHINGS_NATIVELIB}/libnode.so\" \"$@\"; "
+						"}; "
+						"npm(){ "
+							"_nr=\"${METHINGS_NODE_ROOT:-}\"; "
+							"if [ -z \"$_nr\" ]; then _nr=\"${METHINGS_HOME}/../node\"; fi; "
+							"LD_LIBRARY_PATH=\"$_nr/lib:${LD_LIBRARY_PATH:-}\" "
+							"NPM_CONFIG_PREFIX=\"${METHINGS_HOME}/npm-prefix\" "
+							"NPM_CONFIG_CACHE=\"${METHINGS_HOME}/npm-cache\" "
+							"\"${METHINGS_NATIVELIB}/libnode.so\" \"$_nr/usr/lib/node_modules/npm/bin/npm-cli.js\" \"$@\"; "
+						"}; "
+						"npx(){ "
+							"_nr=\"${METHINGS_NODE_ROOT:-}\"; "
+							"if [ -z \"$_nr\" ]; then _nr=\"${METHINGS_HOME}/../node\"; fi; "
+							"LD_LIBRARY_PATH=\"$_nr/lib:${LD_LIBRARY_PATH:-}\" "
+							"NPM_CONFIG_PREFIX=\"${METHINGS_HOME}/npm-prefix\" "
+							"NPM_CONFIG_CACHE=\"${METHINGS_HOME}/npm-cache\" "
+							"\"${METHINGS_NATIVELIB}/libnode.so\" \"$_nr/usr/lib/node_modules/npm/bin/npx-cli.js\" \"$@\"; "
+						"}; "
+						"corepack(){ "
+							"_nr=\"${METHINGS_NODE_ROOT:-}\"; "
+							"if [ -z \"$_nr\" ]; then _nr=\"${METHINGS_HOME}/../node\"; fi; "
+							"LD_LIBRARY_PATH=\"$_nr/lib:${LD_LIBRARY_PATH:-}\" "
+							"\"${METHINGS_NATIVELIB}/libnode.so\" \"$_nr/usr/lib/node_modules/corepack/dist/corepack.js\" \"$@\"; "
+						"}; "
+					"fi; "
+						"dropbearkey(){ %s/libdropbearkey.so \"$@\"; }; ",
+					nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib, nlib);
+			}
+		}
+
 	if (chansess->cmd == NULL && chansess->term == NULL) {
-		const char *prompt = "kugutz> ";
+		const char *prompt = "methings> ";
 		char linebuf[1024];
 		while (1) {
 			size_t pos = 0;
@@ -1121,7 +1353,15 @@ static void execchild(const void *user_data) {
 			}
 			pid_t pid = fork();
 			if (pid == 0) {
-				execl("/system/bin/sh", "sh", "-c", linebuf, (char *)NULL);
+				if (methings_preamble) {
+					/* Prepend function defs so python3/pip resolve correctly */
+					size_t wlen = strlen(methings_preamble) + strlen(linebuf) + 1;
+					char *wrapped = m_malloc(wlen);
+					snprintf(wrapped, wlen, "%s%s", methings_preamble, linebuf);
+					execl("/system/bin/sh", "sh", "-c", wrapped, (char *)NULL);
+				} else {
+					execl("/system/bin/sh", "sh", "-c", linebuf, (char *)NULL);
+				}
 				_exit(127);
 			} else if (pid > 0) {
 				int status = 0;
@@ -1131,9 +1371,23 @@ static void execchild(const void *user_data) {
 			}
 		}
 	}
-#endif
+
+	/* Wrap non-interactive commands with python3/pip function definitions */
+	{
+		const char *final_cmd = chansess->cmd;
+		if (chansess->cmd != NULL && methings_preamble) {
+			size_t wlen = strlen(methings_preamble) + strlen(chansess->cmd) + 1;
+			char *wrapped = m_malloc(wlen);
+			snprintf(wrapped, wlen, "%s%s", methings_preamble, chansess->cmd);
+			final_cmd = wrapped;
+		}
+		usershell = m_strdup(get_user_shell());
+		run_shell_command(final_cmd, ses.maxfd, usershell);
+	}
+#else
 	usershell = m_strdup(get_user_shell());
 	run_shell_command(chansess->cmd, ses.maxfd, usershell);
+#endif
 
 	/* only reached on error */
 	dropbear_exit("Child failed");
