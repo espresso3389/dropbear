@@ -1263,10 +1263,11 @@ static void execchild(const void *user_data) {
 					/* Node.js runtime (Termux-built) + npm/corepack assets (extracted by the app).
 					   This provides a Node-compatible shell environment when present. */
 					"if [ -x \"${METHINGS_NATIVELIB}/libnode.so\" ]; then "
-						/* npm runs lifecycle scripts via /system/bin/sh -c and won't source $ENV.
-						   Force script-shell to our custom shell binary (nativeLibraryDir, executable). */
-						"export npm_config_script_shell=\"${METHINGS_NATIVELIB}/libmethingssh.so\"; "
-						"export NPM_CONFIG_SCRIPT_SHELL=\"${METHINGS_NATIVELIB}/libmethingssh.so\"; "
+						/* npm runs lifecycle scripts via sh -c. methings-sh is a smart
+						   shebang-aware wrapper that rewrites scripts to use the correct
+						   interpreter, working around SELinux app_data_file restrictions. */
+						"export npm_config_script_shell=\"${METHINGS_BINDIR}/methings-sh\"; "
+						"export NPM_CONFIG_SCRIPT_SHELL=\"${METHINGS_BINDIR}/methings-sh\"; "
 						"node(){ "
 							"_nr=\"${METHINGS_NODE_ROOT:-}\"; "
 							"if [ -z \"$_nr\" ]; then _nr=\"${METHINGS_HOME}/../node\"; fi; "
