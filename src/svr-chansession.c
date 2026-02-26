@@ -607,13 +607,6 @@ static int sessionpty(struct ChanSess * chansess) {
 		TRACE(("leave sessionpty: term len too long"))
 		return DROPBEAR_FAILURE;
 	}
-#ifdef __ANDROID__
-	/* Most Android user builds don't expose a usable devpts mount to app sandboxes. */
-	dropbear_log(LOG_WARNING, "pty requested but unsupported; rejecting pty request");
-	m_free(chansess->term);
-	chansess->term = NULL;
-	return DROPBEAR_FAILURE;
-#endif
 	/* allocate the pty */
 	if (chansess->master != -1) {
 		dropbear_exit("Multiple pty requests");
