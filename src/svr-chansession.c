@@ -607,13 +607,6 @@ static int sessionpty(struct ChanSess * chansess) {
 		TRACE(("leave sessionpty: term len too long"))
 		return DROPBEAR_FAILURE;
 	}
-#ifdef __ANDROID__
-	/* Most Android user builds don't expose a usable devpts mount to app sandboxes. */
-	dropbear_log(LOG_WARNING, "pty requested but unsupported; rejecting pty request");
-	m_free(chansess->term);
-	chansess->term = NULL;
-	return DROPBEAR_FAILURE;
-#endif
 	/* allocate the pty */
 	if (chansess->master != -1) {
 		dropbear_exit("Multiple pty requests");
@@ -1270,10 +1263,11 @@ static void execchild(const void *user_data) {
 					/* Node.js runtime (Termux-built) + npm/corepack assets (extracted by the app).
 					   This provides a Node-compatible shell environment when present. */
 					"if [ -x \"${METHINGS_NATIVELIB}/libnode.so\" ]; then "
-						/* npm runs lifecycle scripts via /system/bin/sh -c and won't source $ENV.
-						   Force script-shell to our custom shell binary (nativeLibraryDir, executable). */
-						"export npm_config_script_shell=\"${METHINGS_NATIVELIB}/libmethingssh.so\"; "
-						"export NPM_CONFIG_SCRIPT_SHELL=\"${METHINGS_NATIVELIB}/libmethingssh.so\"; "
+						/* npm runs lifecycle scripts via sh -c. methings-sh is a smart
+						   shebang-aware wrapper that rewrites scripts to use the correct
+						   interpreter, working around SELinux app_data_file restrictions. */
+						"export npm_config_script_shell=\"${METHINGS_BINDIR}/methings-sh\"; "
+						"export NPM_CONFIG_SCRIPT_SHELL=\"${METHINGS_BINDIR}/methings-sh\"; "
 						"node(){ "
 							"_nr=\"${METHINGS_NODE_ROOT:-}\"; "
 							"if [ -z \"$_nr\" ]; then _nr=\"${METHINGS_HOME}/../node\"; fi; "
@@ -1372,17 +1366,13 @@ static void execchild(const void *user_data) {
 		}
 	}
 
-	/* Wrap non-interactive commands with python3/pip function definitions */
+	/* For non-interactive commands (ssh host 'cmd'), skip the preamble so that
+	   methings-sh (the login shell wrapper) can detect shebangs in the actual
+	   command and rewrite execution to work around SELinux app_data_file.
+	   The preamble is still used for the interactive REPL below. */
 	{
-		const char *final_cmd = chansess->cmd;
-		if (chansess->cmd != NULL && methings_preamble) {
-			size_t wlen = strlen(methings_preamble) + strlen(chansess->cmd) + 1;
-			char *wrapped = m_malloc(wlen);
-			snprintf(wrapped, wlen, "%s%s", methings_preamble, chansess->cmd);
-			final_cmd = wrapped;
-		}
 		usershell = m_strdup(get_user_shell());
-		run_shell_command(final_cmd, ses.maxfd, usershell);
+		run_shell_command(chansess->cmd, ses.maxfd, usershell);
 	}
 #else
 	usershell = m_strdup(get_user_shell());
