@@ -1366,17 +1366,13 @@ static void execchild(const void *user_data) {
 		}
 	}
 
-	/* Wrap non-interactive commands with python3/pip function definitions */
+	/* For non-interactive commands (ssh host 'cmd'), skip the preamble so that
+	   methings-sh (the login shell wrapper) can detect shebangs in the actual
+	   command and rewrite execution to work around SELinux app_data_file.
+	   The preamble is still used for the interactive REPL below. */
 	{
-		const char *final_cmd = chansess->cmd;
-		if (chansess->cmd != NULL && methings_preamble) {
-			size_t wlen = strlen(methings_preamble) + strlen(chansess->cmd) + 1;
-			char *wrapped = m_malloc(wlen);
-			snprintf(wrapped, wlen, "%s%s", methings_preamble, chansess->cmd);
-			final_cmd = wrapped;
-		}
 		usershell = m_strdup(get_user_shell());
-		run_shell_command(final_cmd, ses.maxfd, usershell);
+		run_shell_command(chansess->cmd, ses.maxfd, usershell);
 	}
 #else
 	usershell = m_strdup(get_user_shell());
